@@ -10,7 +10,8 @@ export class ElasticsearchVectorApi implements ICredentialType {
 
 	displayName = 'Elasticsearch Vector Store API';
 
-	documentationUrl = 'https://www.elastic.co/guide/en/elasticsearch/reference/current/security-api.html';
+	documentationUrl =
+		'https://www.elastic.co/guide/en/elasticsearch/reference/current/security-api.html';
 
 	properties: INodeProperties[] = [
 		{

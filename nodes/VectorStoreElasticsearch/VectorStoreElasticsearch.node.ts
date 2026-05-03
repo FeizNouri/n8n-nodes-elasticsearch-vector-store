@@ -47,6 +47,58 @@ const insertFields: INodeProperties[] = [
 				description:
 					'Whether to delete and recreate the index before inserting. Use with care — destroys existing data.',
 			},
+			{
+				displayName: 'Metadata Keys to Keep',
+				name: 'metadataKeep',
+				type: 'string',
+				default: '',
+				placeholder: 'source, page_number',
+				description:
+					'Comma-separated allowlist of metadata keys. Empty = keep all (including auto-generated noise like pdf.*, loc.*, source). Set this to strip unwanted fields injected by document loaders.',
+			},
+			{
+				displayName: 'Add Chunk Index',
+				name: 'addChunkIndex',
+				type: 'boolean',
+				default: false,
+				description:
+					'Whether to auto-number chunks per input item and store as a top-level "chunk_index" field',
+			},
+		],
+	},
+	{
+		displayName: 'Custom Top-Level Fields',
+		name: 'customFields',
+		type: 'fixedCollection',
+		typeOptions: { multipleValues: true, sortable: false },
+		placeholder: 'Add Field',
+		default: {},
+		displayOptions: { show: { mode: ['insert'] } },
+		description:
+			'Top-level fields to add to every ES document, alongside text/embedding/metadata. Values support n8n expressions and are evaluated per input item.',
+		options: [
+			{
+				name: 'fields',
+				displayName: 'Field',
+				values: [
+					{
+						displayName: 'Name',
+						name: 'name',
+						type: 'string',
+						default: '',
+						placeholder: 'account_id',
+						description: 'Field name (will be at the top level of the ES document)',
+					},
+					{
+						displayName: 'Value',
+						name: 'value',
+						type: 'string',
+						default: '',
+						placeholder: '={{ $json.account_id }}',
+						description: 'Field value. Supports expressions referencing the current input item.',
+					},
+				],
+			},
 		],
 	},
 ];
@@ -101,7 +153,7 @@ const retrieveFields: INodeProperties[] = [
 		placeholder: 'Useful for answering questions about [your data here]',
 		displayOptions: { show: { mode: ['retrieve-as-tool'] } },
 		description:
-			"Description shown to the AI agent. Be specific — agents use this to decide when to call the tool.",
+			'Description shown to the AI agent. Be specific — agents use this to decide when to call the tool.',
 	},
 ];
 
@@ -328,7 +380,11 @@ async function runGetMany(this: IExecuteFunctions): Promise<INodeExecutionData[]
 async function runInsert(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 	const items = this.getInputData();
 	const indexName = this.getNodeParameter('indexName', 0) as string;
-	const options = this.getNodeParameter('options', 0, {}) as { clearIndex?: boolean };
+	const options = this.getNodeParameter('options', 0, {}) as {
+		clearIndex?: boolean;
+		metadataKeep?: string;
+		addChunkIndex?: boolean;
+	};
 
 	const embeddings = (await this.getInputConnectionData(
 		NodeConnectionTypes.AiEmbedding,
@@ -342,45 +398,172 @@ async function runInsert(this: IExecuteFunctions): Promise<INodeExecutionData[][
 		);
 	}
 
-	// Documents may arrive as a Document[] (already processed) or as a loader object
-	// with a processItem method (e.g. Default Data Loader operating per-item).
 	const documentInput = await this.getInputConnectionData(NodeConnectionTypes.AiDocument, 0);
-
-	const documents: Document[] = await resolveDocuments(documentInput, items);
-
-	if (documents.length === 0) {
-		throw new NodeOperationError(
-			this.getNode(),
-			'No documents to insert. Make sure your document loader is producing output.',
-		);
-	}
-
 	const client = await getElasticsearchClient.call(this);
 
+	// Optional: wipe the index first
 	if (options.clearIndex) {
 		try {
 			await client.indices.delete({ index: indexName });
 		} catch (err) {
-			// 404 is fine — index didn't exist yet
 			if ((err as { meta?: { statusCode?: number } })?.meta?.statusCode !== 404) {
 				throw err;
 			}
 		}
 	}
 
-	const store = new ElasticVectorSearch(embeddings, { client, indexName });
-	await store.addDocuments(documents);
+	// Parse metadata allowlist once
+	const metadataKeep = (options.metadataKeep ?? '')
+		.split(',')
+		.map((s) => s.trim())
+		.filter(Boolean);
+
+	const filterMetadata = (md: Record<string, unknown> | undefined): Record<string, unknown> => {
+		if (!md) return {};
+		if (metadataKeep.length === 0) return md;
+		const out: Record<string, unknown> = {};
+		for (const k of metadataKeep) {
+			if (k in md) out[k] = md[k];
+		}
+		return out;
+	};
+
+	// Detect whether we need raw-mode insert (custom fields, chunk_index, or metadata filtering)
+	// — anything that requires controlling the doc shape beyond ElasticVectorSearch's defaults.
+	const customFieldsTemplate = this.getNodeParameter('customFields.fields', 0, []) as Array<{
+		name?: string;
+		value?: unknown;
+	}>;
+	const needsRawMode =
+		customFieldsTemplate.length > 0 || options.addChunkIndex === true || metadataKeep.length > 0;
+
+	let totalInserted = 0;
+
+	// ----- Raw-mode insert: full doc shape control -----
+	if (needsRawMode) {
+		// Process per-item so n8n expressions in custom field values resolve against each input
+		for (let i = 0; i < items.length; i++) {
+			const itemDocs: Document[] = await getDocsForItem(documentInput, items, i);
+			if (itemDocs.length === 0) continue;
+
+			// Resolve custom fields for THIS item — getNodeParameter re-evaluates expressions per index
+			const customFields = this.getNodeParameter('customFields.fields', i, []) as Array<{
+				name?: string;
+				value?: unknown;
+			}>;
+
+			const customFieldObj: Record<string, unknown> = {};
+			for (const f of customFields) {
+				if (f.name) customFieldObj[f.name] = f.value;
+			}
+
+			// Embed all chunks in one batch call
+			const texts = itemDocs.map((d) => d.pageContent);
+			const vectors = await embeddings.embedDocuments(texts);
+
+			// Ensure index exists with a dense_vector mapping that matches our embedding dim
+			await ensureIndex(client, indexName, vectors[0]?.length ?? 0);
+
+			// Build bulk operations
+			const operations: unknown[] = [];
+			for (let j = 0; j < itemDocs.length; j++) {
+				const doc: Record<string, unknown> = {
+					text: itemDocs[j].pageContent,
+					embedding: vectors[j],
+					metadata: filterMetadata(itemDocs[j].metadata as Record<string, unknown>),
+					...customFieldObj,
+				};
+				if (options.addChunkIndex) {
+					doc.chunk_index = j;
+				}
+				operations.push({ index: { _index: indexName } });
+				operations.push(doc);
+			}
+
+			const result = await client.bulk({ operations, refresh: true });
+			if (result.errors) {
+				const failed = result.items.find((it) => it.index?.error);
+				throw new NodeOperationError(
+					this.getNode(),
+					`Elasticsearch bulk insert failed: ${JSON.stringify(failed?.index?.error)}`,
+				);
+			}
+
+			totalInserted += itemDocs.length;
+		}
+	} else {
+		// ----- Default mode: hand off to ElasticVectorSearch.addDocuments -----
+		const documents: Document[] = await resolveDocuments(documentInput, items);
+		if (documents.length === 0) {
+			throw new NodeOperationError(
+				this.getNode(),
+				'No documents to insert. Make sure your document loader is producing output.',
+			);
+		}
+		const store = new ElasticVectorSearch(embeddings, { client, indexName });
+		await store.addDocuments(documents);
+		totalInserted = documents.length;
+	}
 
 	return [
 		items.map((item, i) => ({
 			json: {
 				...item.json,
-				inserted: documents.length,
+				inserted: totalInserted,
 				indexName,
 			},
 			pairedItem: { item: i },
 		})),
 	];
+}
+
+async function getDocsForItem(
+	documentInput: unknown,
+	items: INodeExecutionData[],
+	itemIndex: number,
+): Promise<Document[]> {
+	if (!documentInput) return [];
+
+	// Per-item loader (the usual case with Default Data Loader)
+	const loader = documentInput as {
+		processItem?: (item: INodeExecutionData, i: number) => Promise<Document[]>;
+	};
+	if (typeof loader.processItem === 'function') {
+		return await loader.processItem(items[itemIndex], itemIndex);
+	}
+
+	// Pre-resolved Document[] — only return the slice for item 0 to avoid duplication
+	if (Array.isArray(documentInput)) {
+		return itemIndex === 0 ? (documentInput as Document[]) : [];
+	}
+
+	const wrapped = documentInput as { processedDocuments?: Document[] };
+	if (Array.isArray(wrapped.processedDocuments)) {
+		return itemIndex === 0 ? wrapped.processedDocuments : [];
+	}
+
+	return [];
+}
+
+async function ensureIndex(client: Client, indexName: string, dims: number): Promise<void> {
+	if (dims === 0) return;
+	const exists = await client.indices.exists({ index: indexName });
+	if (exists) return;
+	await client.indices.create({
+		index: indexName,
+		mappings: {
+			properties: {
+				text: { type: 'text' },
+				embedding: {
+					type: 'dense_vector',
+					dims,
+					index: true,
+					similarity: 'cosine',
+				},
+				metadata: { type: 'object', enabled: true },
+			},
+		},
+	});
 }
 
 async function resolveDocuments(
@@ -394,7 +577,9 @@ async function resolveDocuments(
 		return documentInput as Document[];
 	}
 
-	const loader = documentInput as { processItem?: (item: INodeExecutionData, i: number) => Promise<Document[]> };
+	const loader = documentInput as {
+		processItem?: (item: INodeExecutionData, i: number) => Promise<Document[]>;
+	};
 	if (typeof loader.processItem === 'function') {
 		const all: Document[] = [];
 		for (let i = 0; i < items.length; i++) {
