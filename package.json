@@ -27,9 +27,9 @@
 	"bugs": {
 		"url": "https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/issues"
 	},
-  "overrides": {
-    "isolated-vm": "^5.0.0"
-  },
+	"overrides": {
+		"isolated-vm": "^5.0.0"
+	},
 	"main": "index.js",
 	"scripts": {
 		"build": "rimraf dist && tsc && gulp build:icons",
