@@ -1,0 +1,14 @@
+node_modules
+*.log
+.git
+.vscode
+.idea
+.eslintrc.js
+.eslintrc.prepublish.js
+.prettierrc.js
+tsconfig.json
+gulpfile.js
+nodes
+credentials
+*.ts
+!dist/**/*.d.ts
