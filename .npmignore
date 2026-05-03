@@ -11,4 +11,5 @@ gulpfile.js
 nodes
 credentials
 *.ts
+.index.js
 !dist/**/*.d.ts
