@@ -1,98 +1,136 @@
 # n8n-nodes-elasticsearch-vector-store
 
-An n8n community node that turns Elasticsearch into a first-class **LangChain vector store** — equivalent to the official `Postgres PGVector Store` node, but for Elasticsearch.
+[![npm version](https://img.shields.io/npm/v/n8n-nodes-elasticsearch-vector-store.svg)](https://www.npmjs.com/package/n8n-nodes-elasticsearch-vector-store)
+[![npm downloads](https://img.shields.io/npm/dm/n8n-nodes-elasticsearch-vector-store.svg)](https://www.npmjs.com/package/n8n-nodes-elasticsearch-vector-store)
+[![license](https://img.shields.io/npm/l/n8n-nodes-elasticsearch-vector-store.svg)](./LICENSE.md)
 
-Supports the same four operation modes as the official vector store nodes:
+An [n8n](https://n8n.io) community node that turns **Elasticsearch** into a first-class **LangChain vector store** — the Elasticsearch equivalent of the official `Postgres PGVector Store` node. Use it for RAG ingestion, similarity search, retrieval chains, and AI agent tools, all backed by Elasticsearch's native kNN/HNSW search.
 
-- **Get Many** — embed a prompt and return ranked similar documents
-- **Insert Documents** — embed and store documents (typically from a Document Loader sub-node)
-- **Retrieve Documents (As Vector Store for Chain/Tool)** — provide the vector store to a `Vector Store Retriever` or `Question and Answer Chain`
-- **Retrieve Documents (As Tool for AI Agent)** — expose the vector store as a tool an AI Agent can call
-
-Built on `@langchain/community`'s `ElasticVectorSearch` (the same class `langchain-elasticsearch` wraps), so it speaks Elasticsearch's native kNN/HNSW search.
+> Maintained by **[Hurence](https://www.hurence.com)** — open-sourced for the n8n community.
 
 ---
 
-## 1. Build the package
+## Features
+
+- Four operation modes, identical to n8n's official vector store nodes:
+  - **Get Many** — embed a prompt and return ranked similar documents
+  - **Insert Documents** — embed and store documents from a Document Loader sub-node
+  - **Retrieve Documents (As Vector Store for Chain/Tool)** — wire into a `Vector Store Retriever` or `Question and Answer Chain`
+  - **Retrieve Documents (As Tool for AI Agent)** — expose the store as a tool the agent can call
+- Native Elasticsearch kNN search on `dense_vector` fields (HNSW, cosine similarity)
+- Auto-creates the index with the correct mapping on first insert, with embedding dimension auto-detected from your embeddings sub-node
+- **Custom top-level fields** for multi-tenant filtering (e.g. `account_id`, `pipeline_id`) — evaluated as n8n expressions per item
+- **Metadata allowlist** to drop noisy auto-generated keys (e.g. `pdf.*`, `loc.*`) from document loaders
+- **`chunk_index`** — automatically number chunks per input item
+- Works with any n8n embeddings sub-node (OpenAI, Gemini, Cohere, Ollama, etc.)
+- Auth: Basic, API Key, or none — with optional SSL bypass for dev clusters
+
+---
+
+## Installation
+
+### Option A — From the n8n UI (recommended)
+
+1. In your self-hosted n8n: **Settings → Community Nodes → Install**
+2. Enter `n8n-nodes-elasticsearch-vector-store`
+3. Click **Install**
+
+> Community nodes are disabled by default on Docker. Set the following env vars on your n8n container:
+>
+> ```
+> N8N_COMMUNITY_PACKAGES_ENABLED=true
+> N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true
+> ```
+
+After install, the node appears as **"Elasticsearch Vector Store"** under **AI → Vector Stores**.
+
+### Option B — Manual (custom directory)
 
 ```bash
-git clone <this-repo> n8n-nodes-elasticsearch-vector-store
+mkdir -p ~/.n8n/custom
+cd ~/.n8n/custom
+npm init -y                                       # if not already initialized
+npm install n8n-nodes-elasticsearch-vector-store
+```
+
+Restart n8n.
+
+### Option C — Build from source
+
+```bash
+git clone https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store.git
 cd n8n-nodes-elasticsearch-vector-store
 npm install
 npm run build
-```
 
-This produces a `dist/` folder that n8n can load.
-
-## 2. Install into your self-hosted n8n
-
-You have two options.
-
-### Option A — Install from your local checkout (fastest for testing)
-
-```bash
-# Inside the package directory
+# then link into your custom directory
 npm link
-
-# Then in your n8n custom nodes directory (default: ~/.n8n/custom)
-mkdir -p ~/.n8n/custom
 cd ~/.n8n/custom
-npm init -y       # if not already initialized
 npm link n8n-nodes-elasticsearch-vector-store
 ```
 
-Restart n8n. The node will appear as **"Elasticsearch Vector Store"** in the AI > Vector Stores section.
+---
 
-### Option B — Install via the n8n UI (after publishing to npm)
+## Configuration
 
-1. Publish the package to npm: `npm publish` (after updating `name`, `repository`, and `author` in `package.json`)
-2. In n8n: **Settings → Community Nodes → Install** → enter `n8n-nodes-elasticsearch-vector-store` → Install
+Create a credential of type **Elasticsearch Vector Store API** in n8n:
 
-> ⚠️ Installing community nodes via the UI is disabled by default on Docker. Set `N8N_COMMUNITY_PACKAGES_ENABLED=true` and `N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true` in your environment.
+| Field | Description |
+|---|---|
+| **Base URL** | Your Elasticsearch endpoint, e.g. `http://elasticsearch:9200` |
+| **Authentication** | `Basic Auth`, `API Key`, or `None` |
+| **Username / Password** | For Basic Auth |
+| **API Key** | The base64-encoded `id:api_key` value from `POST /_security/api_key` — **not** the `ApiKey <encoded>` wrapper |
+| **Ignore SSL Issues** | Toggle on for self-signed certificates in dev |
 
-### Option C — Self-hosted Docker
-
-Mount the built `dist/` folder into the container's custom directory:
-
-```yaml
-# docker-compose.yml fragment
-services:
-  n8n:
-    volumes:
-      - ./n8n-nodes-elasticsearch-vector-store:/home/node/.n8n/custom/n8n-nodes-elasticsearch-vector-store
-```
-
-Then `cd /home/node/.n8n/custom && npm install ./n8n-nodes-elasticsearch-vector-store` inside the container, and restart.
+The same credential is used by both the underlying Elasticsearch client (index management, bulk insert) and the LangChain wrapper (kNN search).
 
 ---
 
-## 3. Configure credentials
+## Operation modes
 
-In n8n: **Credentials → New → Elasticsearch Vector Store API**.
+### 1. Insert Documents
 
-- **Base URL** — `http://elasticsearch:9200` (or your real URL)
-- **Authentication** — Basic Auth, API Key, or None
-- **Ignore SSL Issues** — toggle on for self-signed certs in dev
+Embed and write documents from a Document Loader sub-node into an Elasticsearch index.
 
-The credential is used by both the ES client (for index management and bulk insert) and by the LangChain wrapper (for kNN search).
+**Required inputs:** a Document Loader sub-node and an Embeddings sub-node.
+
+**Options:**
+
+| Option | Default | What it does |
+|---|---|---|
+| `Clear Index Before Insert` | `false` | Drops and recreates the index before writing — useful when switching embedding models (and so changing the vector dimension) |
+| `Metadata Keys to Keep` | *(empty = keep all)* | Comma-separated allowlist of metadata keys to store. Everything else is dropped. Great for stripping `pdf.*`, `loc.*`, and similar loader noise |
+| `Add Chunk Index` | `false` | Stores a top-level `chunk_index` field (0, 1, 2, …) per input item, useful for re-ordering chunks at retrieval time |
+| `Custom Top-Level Fields` | *(empty)* | Name/value pairs added to every document. Values support n8n expressions, so you can pipe per-item context (`{{$json.account_id}}`, `{{$json.pipeline_id}}`, …). Lets you filter at search time and supports multi-tenant indexes |
+
+### 2. Get Many
+
+Embed a prompt and return the top-k ranked documents with their similarity scores on the Main output. Handy for debugging or building custom flows that don't need a full retriever chain.
+
+### 3. Retrieve Documents (As Vector Store for Chain/Tool)
+
+Provides the vector store on the `ai_vectorStore` output, so you can plug it into a `Vector Store Retriever`, `Question and Answer Chain`, or other LangChain-style nodes.
+
+### 4. Retrieve Documents (As Tool for AI Agent)
+
+Wraps the vector store in a LangChain `DynamicTool` so an AI Agent can call it. Set the tool **Name** and **Description** carefully — the agent uses the description to decide when to invoke it.
 
 ---
 
-## 4. Usage patterns
+## Usage patterns
 
-### A. Indexing a document (RAG ingestion)
+### RAG ingestion
 
 ```
-Manual Trigger → HTTP Request (or any source)
-                       ↓
-              Default Data Loader  ──┐
-                                      ├──→  Elasticsearch Vector Store [mode: Insert Documents]
-              Embeddings (OpenAI/Gemini/etc.)  ──┘
+Trigger → Source (HTTP / Drive / DB / …)
+              ↓
+       Default Data Loader  ──┐
+                              ├──→  Elasticsearch Vector Store [Insert Documents]
+       Embeddings  ───────────┘
 ```
 
-Set the Vector Store node to **Insert Documents** mode and give it an index name like `my-knowledge`. The index is auto-created on first insert with the right `dense_vector` mapping.
-
-### B. RAG question-answering chain
+### Q&A chain
 
 ```
 Chat Trigger
@@ -103,43 +141,38 @@ Question and Answer Chain
 Vector Store Retriever
      │ (Vector Store)
      ↓
-Elasticsearch Vector Store [mode: Retrieve Documents (As Vector Store for Chain/Tool)]
-                            ↑
-                      Embeddings
+Elasticsearch Vector Store [Retrieve as Vector Store]
+     ↑
+Embeddings
 ```
 
-### C. AI Agent with vector store as a tool
+### AI Agent with vector store as a tool
 
 ```
 AI Agent
    │ (Tools)
    ↓
-Elasticsearch Vector Store [mode: Retrieve Documents (As Tool for AI Agent)]
-                            ↑
-                      Embeddings
+Elasticsearch Vector Store [Retrieve as Tool]
+   ↑
+Embeddings
 
-Set:
-  Name:        company_kb
-  Description: Useful for answering questions about <your data>.
-                Always use this when the user asks about <topic>.
+Name:        company_kb
+Description: Useful for answering questions about <your data>.
+             Always use this when the user asks about <topic>.
 ```
 
-### D. Direct similarity search (no agent)
+---
 
-Use **Get Many** mode and feed a prompt — the node returns ranked documents with similarity scores in normal Main output. Handy for debugging your embeddings or building custom flows.
+## Notes & gotchas
+
+- **Embedding dimension is fixed at index creation.** Switching embedding models later (e.g. 1536-dim → 768-dim) will trigger a mismatch error. Either use a fresh index name or enable **Clear Index Before Insert**.
+- **Index names** must be lowercase, no spaces — this is enforced by Elasticsearch itself.
+- **API Key**: paste the `encoded` value from the `POST /_security/api_key` response, not the `ApiKey <encoded>` HTTP header form.
+- **Hybrid search & ELSER**: the underlying `ElasticVectorSearch` class supports hybrid (BM25 + kNN) and ELSER sparse vectors, but those config knobs aren't exposed in the UI yet — PRs welcome.
 
 ---
 
-## 5. Notes & gotchas
-
-- **Embedding dimension**: Elasticsearch's `dense_vector` field is created on the first insert based on the embeddings sub-node's output dimension. If you switch embedding models later (e.g. 1536-dim → 768-dim), you'll get a dimension mismatch error. Use a fresh index name, or enable **Clear Index Before Insert** in the options.
-- **Index naming**: Use lowercase, no spaces. Elasticsearch enforces this.
-- **API Key auth**: Paste the base64-encoded `id:api_key` value (the `encoded` field from the `POST /_security/api_key` response), not `ApiKey <encoded>`.
-- **Hybrid search and ELSER**: `ElasticVectorSearch` from `@langchain/community` uses straightforward kNN. If you need hybrid (BM25 + kNN) or ELSER sparse vectors, the underlying class supports it but the n8n UI fields here don't expose it yet — extend `buildVectorStore` to pass extra config.
-
----
-
-## 6. Architecture (for the curious)
+## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -149,7 +182,6 @@ Use **Get Many** mode and feed a prompt — the node returns ranked documents wi
 │                                                      │
 │  execute()        →  insert / load                   │
 │  supplyData()     →  retrieve / retrieve-as-tool     │
-│                                                      │
 │        │                                             │
 │        ▼                                             │
 │  buildVectorStore()                                  │
@@ -159,8 +191,54 @@ Use **Get Many** mode and feed a prompt — the node returns ranked documents wi
 └──────────────────────────────────────────────────────┘
 ```
 
-The node never holds connections between executions — a fresh ES client is created per run, matching how n8n's official PGVector node handles connection lifecycle.
+A fresh Elasticsearch client is created per workflow execution — no long-lived connections are held between runs. This matches the lifecycle pattern of n8n's official PGVector node.
+
+---
+
+## Development
+
+```bash
+npm install
+npm run dev        # TypeScript watch mode
+npm run lint       # ESLint (n8n-nodes-base rules)
+npm run build      # rimraf dist && tsc && gulp build:icons
+```
+
+The compiled output goes to `dist/`. The `n8n` block in `package.json` points n8n at the built node and credential files.
+
+---
+
+## Compatibility
+
+- **n8n**: `>= 1.0` (any version exposing `n8n-workflow` and the LangChain integration nodes)
+- **Elasticsearch**: 8.x (uses the `@elastic/elasticsearch` v8 client and `dense_vector` HNSW indexing)
+- **Node.js**: 20.x or newer (matches n8n's runtime)
+
+---
+
+## Issues & contributions
+
+Bug reports and feature requests: <https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/issues>
+
+Pull requests are welcome — please run `npm run lint` and `npm run build` before submitting.
+
+---
+
+## Maintained by
+
+<p>
+  <a href="https://www.hurence.com">
+    <strong>Hurence</strong>
+  </a>
+  — a data engineering and AI company building production-grade data platforms.
+</p>
+
+This package is developed and maintained by **[Hurence](https://www.hurence.com)** and authored by [Feiz Nouri](https://feiznouri.ovh).
+
+If your team is using this node in production and needs custom features, hybrid search, ELSER support, or commercial support around Elasticsearch + n8n + LLM pipelines, get in touch via [hurence.com](https://www.hurence.com).
+
+---
 
 ## License
 
-MIT
+[MIT](./LICENSE.md)

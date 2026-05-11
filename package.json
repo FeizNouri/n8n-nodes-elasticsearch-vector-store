@@ -20,6 +20,12 @@
 		"email": "feiznouri@gmail.com",
 		"url": "https://feiznouri.ovh"
 	},
+	"contributors": [
+		{
+			"name": "Hurence",
+			"url": "https://www.hurence.com"
+		}
+	],
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store.git"
