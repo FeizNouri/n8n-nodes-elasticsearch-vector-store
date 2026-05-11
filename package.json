@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-elasticsearch-vector-store",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "n8n community node for using Elasticsearch as a LangChain vector store (RAG, similarity search, AI agent tool)",
 	"keywords": [
 		"n8n-community-node-package",
