@@ -91,6 +91,7 @@ export class ElasticsearchVectorApi implements ICredentialType {
 			baseURL: '={{$credentials.baseUrl.replace(/\\/$/, "")}}',
 			url: '/',
 			method: 'GET',
+			skipSslCertificateValidation: '={{$credentials.ignoreSSLIssues}}',
 		},
 	};
 }
