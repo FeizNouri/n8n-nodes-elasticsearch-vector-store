@@ -69,7 +69,12 @@ export class ElasticsearchVectorApi implements ICredentialType {
 		},
 	];
 
-	// Allow n8n to test the credential against Elasticsearch's root endpoint
+	// Allow n8n to test the credential against Elasticsearch's root endpoint.
+	// Note: `skipSslCertificateValidation` lives on `test.request` only — duplicating
+	// it here triggers a merger crash in n8n's credential-test executor
+	// ("Cannot create property '0' on boolean 'true'"). The actual runtime SSL
+	// behavior is handled by `getElasticsearchClient` in the node, which builds
+	// the @elastic/elasticsearch Client directly with `tls.rejectUnauthorized`.
 	authenticate: IAuthenticateGeneric = {
 		type: 'generic',
 		properties: {
@@ -82,7 +87,6 @@ export class ElasticsearchVectorApi implements ICredentialType {
 				username: '={{$credentials.authentication === "basicAuth" ? $credentials.username : ""}}',
 				password: '={{$credentials.authentication === "basicAuth" ? $credentials.password : ""}}',
 			},
-			skipSslCertificateValidation: '={{$credentials.ignoreSSLIssues}}',
 		},
 	};
 
