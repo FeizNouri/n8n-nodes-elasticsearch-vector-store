@@ -64,6 +64,15 @@ const insertFields: INodeProperties[] = [
 				description:
 					'Whether to auto-number chunks per input item and store as a top-level "chunk_index" field',
 			},
+			{
+				displayName: 'Batch Size',
+				name: 'batchSize',
+				type: 'number',
+				default: 100,
+				typeOptions: { minValue: 1 },
+				description:
+					'Maximum number of documents sent per Elasticsearch _bulk request. Lower this if you hit "413 Request Entity Too Large" from a reverse proxy (e.g. nginx default is 1 MB).',
+			},
 		],
 	},
 	{
@@ -384,7 +393,9 @@ async function runInsert(this: IExecuteFunctions): Promise<INodeExecutionData[][
 		clearIndex?: boolean;
 		metadataKeep?: string;
 		addChunkIndex?: boolean;
+		batchSize?: number;
 	};
+	const batchSize = Math.max(1, options.batchSize ?? 100);
 
 	const embeddings = (await this.getInputConnectionData(
 		NodeConnectionTypes.AiEmbedding,
@@ -464,8 +475,9 @@ async function runInsert(this: IExecuteFunctions): Promise<INodeExecutionData[][
 			// Ensure index exists with a dense_vector mapping that matches our embedding dim
 			await ensureIndex(client, indexName, vectors[0]?.length ?? 0);
 
-			// Build bulk operations
-			const operations: unknown[] = [];
+			// Build per-doc payloads, then ship them in batches to keep each _bulk
+			// request small enough for reverse proxies (nginx default is 1 MB).
+			const docs: Array<Record<string, unknown>> = [];
 			for (let j = 0; j < itemDocs.length; j++) {
 				const doc: Record<string, unknown> = {
 					text: itemDocs[j].pageContent,
@@ -476,17 +488,25 @@ async function runInsert(this: IExecuteFunctions): Promise<INodeExecutionData[][
 				if (options.addChunkIndex) {
 					doc.chunk_index = j;
 				}
-				operations.push({ index: { _index: indexName } });
-				operations.push(doc);
+				docs.push(doc);
 			}
 
-			const result = await client.bulk({ operations, refresh: true });
-			if (result.errors) {
-				const failed = result.items.find((it) => it.index?.error);
-				throw new NodeOperationError(
-					this.getNode(),
-					`Elasticsearch bulk insert failed: ${JSON.stringify(failed?.index?.error)}`,
-				);
+			for (let start = 0; start < docs.length; start += batchSize) {
+				const slice = docs.slice(start, start + batchSize);
+				const operations: unknown[] = [];
+				for (const doc of slice) {
+					operations.push({ index: { _index: indexName } });
+					operations.push(doc);
+				}
+
+				const result = await client.bulk({ operations, refresh: true });
+				if (result.errors) {
+					const failed = result.items.find((it) => it.index?.error);
+					throw new NodeOperationError(
+						this.getNode(),
+						`Elasticsearch bulk insert failed: ${JSON.stringify(failed?.index?.error)}`,
+					);
+				}
 			}
 
 			totalInserted += itemDocs.length;
@@ -501,7 +521,10 @@ async function runInsert(this: IExecuteFunctions): Promise<INodeExecutionData[][
 			);
 		}
 		const store = new ElasticVectorSearch(embeddings, { client, indexName });
-		await store.addDocuments(documents);
+		// Batch to keep each _bulk request under reverse-proxy body limits.
+		for (let start = 0; start < documents.length; start += batchSize) {
+			await store.addDocuments(documents.slice(start, start + batchSize));
+		}
 		totalInserted = documents.length;
 	}
 
