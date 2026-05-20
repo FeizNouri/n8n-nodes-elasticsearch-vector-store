@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-20
+
+### Added
+
+- **Batch Size** option in Insert mode — chunks the `_bulk` request into N-document batches. Default `100`. Lower this to work around `413 Request Entity Too Large` from reverse proxies (e.g. nginx default `client_max_body_size` is 1 MB). Applies to both the raw-mode and default `addDocuments` insert paths.
+
+### Fixed
+
+- Credential test ("Save / Test" in the credential dialog) now honors the **Ignore SSL Issues** toggle. Previously the test request always ran with strict TLS verification, so self-signed Elasticsearch clusters reported `self-signed certificate in certificate chain` even though the option was on. Runtime requests were already unaffected.
+
 ## [0.2.1] - 2026-05-11
 
 ### Changed
@@ -41,7 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Elasticsearch Vector Store API` credential supporting Basic Auth, API Key, and "Ignore SSL Issues" toggle for self-signed certs.
 - Built on `@langchain/community`'s `ElasticVectorSearch`, with `@langchain/core` and `@langchain/community` declared as `peerDependencies` to share n8n's bundled instance.
 
-[Unreleased]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/releases/tag/v0.1.0
