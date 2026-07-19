@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-19
+
+### Fixed
+
+- Installing the node from the n8n UI (**Settings → Community Nodes**) no longer fails to resolve LangChain. `@langchain/core` and `@langchain/community` moved from `peerDependencies` to `dependencies` so the n8n community-node installer pulls them in automatically. Previously they were declared as `peerDependencies` with a `*` range, which the UI installer does not install, leaving the node unable to load `ElasticVectorSearch` at runtime.
+
 ## [0.3.1] - 2026-05-20
 
 ### Fixed
@@ -57,7 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Elasticsearch Vector Store API` credential supporting Basic Auth, API Key, and "Ignore SSL Issues" toggle for self-signed certs.
 - Built on `@langchain/community`'s `ElasticVectorSearch`, with `@langchain/core` and `@langchain/community` declared as `peerDependencies` to share n8n's bundled instance.
 
-[Unreleased]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/FeizNouri/n8n-nodes-elasticsearch-vector-store/compare/v0.2.0...v0.2.1

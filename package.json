@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-elasticsearch-vector-store",
-	"version": "0.3.1",
+	"version": "0.3.2",
 	"description": "n8n community node for using Elasticsearch as a LangChain vector store (RAG, similarity search, AI agent tool)",
 	"keywords": [
 		"n8n-community-node-package",
@@ -58,18 +58,16 @@
 		]
 	},
 	"dependencies": {
-		"@elastic/elasticsearch": "^8.14.0"
+		"@elastic/elasticsearch": "^8.14.0",
+		"@langchain/core": "^0.3.0",
+		"@langchain/community": "^0.3.0"
 	},
 	"peerDependencies": {
-		"n8n-workflow": "*",
-		"@langchain/core": "*",
-		"@langchain/community": "*"
+		"n8n-workflow": "*"
 	},
 	"devDependencies": {
 		"@types/node": "^20.11.30",
 		"@typescript-eslint/parser": "^7.15.0",
-		"@langchain/core": "^0.3.0",
-		"@langchain/community": "^0.3.0",
 		"eslint": "^8.57.0",
 		"eslint-plugin-n8n-nodes-base": "^1.16.3",
 		"gulp": "^4.0.2",
