@@ -17,13 +17,16 @@ An [n8n](https://n8n.io) community node that turns **Elasticsearch** into a firs
   - **Insert Documents** — embed and store documents from a Document Loader sub-node
   - **Retrieve Documents (As Vector Store for Chain/Tool)** — wire into a `Vector Store Retriever` or `Question and Answer Chain`
   - **Retrieve Documents (As Tool for AI Agent)** — expose the store as a tool the agent can call
-- Native Elasticsearch kNN search on `dense_vector` fields (HNSW, cosine similarity)
+- Native Elasticsearch kNN search on `dense_vector` fields (HNSW)
 - Auto-creates the index with the correct mapping on first insert, with embedding dimension auto-detected from your embeddings sub-node
-- **Custom top-level fields** for multi-tenant filtering (e.g. `account_id`, `pipeline_id`) — evaluated as n8n expressions per item
+- **Custom top-level fields** for multi-tenant indexing (e.g. `account_id`, `pipeline_id`) — evaluated as n8n expressions per item
+- **Search filters** — exact-match filtering on metadata *or* top-level fields at retrieval time, in every retrieval mode (multi-tenant search)
 - **Metadata allowlist** to drop noisy auto-generated keys (e.g. `pdf.*`, `loc.*`) from document loaders
 - **`chunk_index`** — automatically number chunks per input item
+- **Similarity metric** (cosine / dot product / L2) and kNN `num_candidates` tuning
 - Works with any n8n embeddings sub-node (OpenAI, Gemini, Cohere, Ollama, etc.)
 - Auth: Basic, API Key, or none — with optional SSL bypass for dev clusters
+- **Installs cleanly from the n8n UI** — the only runtime dependencies are `@langchain/core` and `@elastic/elasticsearch`. The LangChain vector-store integration is implemented in this package, so the install never pulls in `@langchain/community` and its ~200 optional peer dependencies
 
 ---
 
@@ -102,11 +105,22 @@ Embed and write documents from a Document Loader sub-node into an Elasticsearch 
 | `Clear Index Before Insert` | `false` | Drops and recreates the index before writing — useful when switching embedding models (and so changing the vector dimension) |
 | `Metadata Keys to Keep` | *(empty = keep all)* | Comma-separated allowlist of metadata keys to store. Everything else is dropped. Great for stripping `pdf.*`, `loc.*`, and similar loader noise |
 | `Add Chunk Index` | `false` | Stores a top-level `chunk_index` field (0, 1, 2, …) per input item, useful for re-ordering chunks at retrieval time |
-| `Custom Top-Level Fields` | *(empty)* | Name/value pairs added to every document. Values support n8n expressions, so you can pipe per-item context (`{{$json.account_id}}`, `{{$json.pipeline_id}}`, …). Lets you filter at search time and supports multi-tenant indexes |
+| `Batch Size` | `100` | Maximum documents per `_bulk` request. Lower it if a reverse proxy rejects large request bodies |
+| `Similarity Metric` | `Default` | Similarity for the `dense_vector` mapping when the index is auto-created (`Cosine`, `Dot Product`, `L2 Norm`). `Default` keeps the historical behavior; existing indices always keep their mapping |
+| `Custom Top-Level Fields` | *(empty)* | Name/value pairs added to every document. Values support n8n expressions, so you can pipe per-item context (`{{$json.account_id}}`, `{{$json.pipeline_id}}`, …). Combine with **Search Filters** at retrieval time for multi-tenant indexes |
 
 ### 2. Get Many
 
 Embed a prompt and return the top-k ranked documents with their similarity scores on the Main output. Handy for debugging or building custom flows that don't need a full retriever chain.
+
+**Options available in all retrieval modes (Get Many, Retrieve, Retrieve as Tool):**
+
+| Option | Default | What it does |
+|---|---|---|
+| `Search Filters` | *(empty)* | Exact-match (term) filters ANDed into every similarity search. Each filter targets either a **Metadata** field (`metadata.<field>`) or a **Top-Level** field (e.g. `account_id` from Custom Top-Level Fields, or `chunk_index`). Values support n8n expressions. Applied even when the store is driven through a `Vector Store Retriever` or Q&A chain |
+| `Number of Candidates` | `200` | kNN `num_candidates` — how many nearest-neighbor candidates each shard considers. Higher improves recall at the cost of speed |
+
+> **Scores** are Elasticsearch's raw kNN `_score` (always positive, higher = more similar; for cosine and L2 indices the range is (0, 1]). They are passed through unconverted, so thresholds tuned on earlier versions keep working.
 
 ### 3. Retrieve Documents (As Vector Store for Chain/Tool)
 
@@ -168,7 +182,7 @@ Description: Useful for answering questions about <your data>.
 - **Embedding dimension is fixed at index creation.** Switching embedding models later (e.g. 1536-dim → 768-dim) will trigger a mismatch error. Either use a fresh index name or enable **Clear Index Before Insert**.
 - **Index names** must be lowercase, no spaces — this is enforced by Elasticsearch itself.
 - **API Key**: paste the `encoded` value from the `POST /_security/api_key` response, not the `ApiKey <encoded>` HTTP header form.
-- **Hybrid search & ELSER**: the underlying `ElasticVectorSearch` class supports hybrid (BM25 + kNN) and ELSER sparse vectors, but those config knobs aren't exposed in the UI yet — PRs welcome.
+- **Hybrid search & ELSER**: not exposed yet. The `ElasticVectorSearch` store class lives in this repo (`src/vectorstore/`), so adding hybrid (BM25 + kNN) or ELSER support is a normal PR — contributions welcome.
 
 ---
 
@@ -176,7 +190,7 @@ Description: Useful for answering questions about <your data>.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  VectorStoreElasticsearch.node.ts                    │
+│  src/nodes/.../VectorStoreElasticsearch.node.ts      │
 │                                                      │
 │  description.inputs/outputs   ←  dynamic by mode     │
 │                                                      │
@@ -188,10 +202,15 @@ Description: Useful for answering questions about <your data>.
 │    ├─ getCredentials → @elastic/elasticsearch Client │
 │    ├─ getInputConnectionData(AiEmbedding)            │
 │    └─ new ElasticVectorSearch(embeddings, {client})  │
+│              │                                       │
+│              ▼                                       │
+│  src/vectorstore/ElasticVectorSearch.ts              │
+│    extends VectorStore from @langchain/core          │
+│    (kNN search, bulk insert, index auto-creation)    │
 └──────────────────────────────────────────────────────┘
 ```
 
-A fresh Elasticsearch client is created per workflow execution — no long-lived connections are held between runs. This matches the lifecycle pattern of n8n's official PGVector node.
+The `ElasticVectorSearch` store class is implemented in this package (drop-in behavioral replica of the former `@langchain/community` class) so the dependency tree stays small enough for n8n's community-node installer. A fresh Elasticsearch client is created per workflow execution — no long-lived connections are held between runs. This matches the lifecycle pattern of n8n's official PGVector node.
 
 ---
 
@@ -201,10 +220,14 @@ A fresh Elasticsearch client is created per workflow execution — no long-lived
 npm install
 npm run dev        # TypeScript watch mode
 npm run lint       # ESLint (n8n-nodes-base rules)
-npm run build      # rimraf dist && tsc && gulp build:icons
+npm test           # jest unit tests (mocked Elasticsearch client)
+npm run build      # rimraf dist && tsc -p tsconfig.build.json && gulp build:icons
+
+# integration tests against a real cluster (never part of npm test):
+ES_TEST_URL=http://localhost:9200 npm run test:integration
 ```
 
-The compiled output goes to `dist/`. The `n8n` block in `package.json` points n8n at the built node and credential files.
+Sources live under `src/` (`src/nodes`, `src/credentials`, `src/vectorstore`); compiled output goes to `dist/`. The `n8n` block in `package.json` points n8n at the built node and credential files.
 
 ---
 
@@ -212,7 +235,8 @@ The compiled output goes to `dist/`. The `n8n` block in `package.json` points n8
 
 - **n8n**: `>= 1.0` (any version exposing `n8n-workflow` and the LangChain integration nodes)
 - **Elasticsearch**: 8.x (uses the `@elastic/elasticsearch` v8 client and `dense_vector` HNSW indexing)
-- **Node.js**: 20.x or newer (matches n8n's runtime)
+- **Node.js**: 20.15 or newer (matches n8n's runtime)
+- **Runtime dependencies**: `@langchain/core` and `@elastic/elasticsearch` only — no `@langchain/community`, so installs from the n8n UI succeed without peer-dependency conflicts
 
 ---
 
