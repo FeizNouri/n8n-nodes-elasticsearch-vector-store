@@ -38,12 +38,12 @@
 	},
 	"main": "index.js",
 	"scripts": {
-		"build": "rimraf dist && tsc && gulp build:icons",
-		"dev": "tsc --watch",
-		"format": "prettier nodes credentials --write",
-		"lint": "eslint nodes credentials package.json",
-		"lintfix": "eslint nodes credentials package.json --fix",
-		"prepublishOnly": "npm run build && npm run lint -c .eslintrc.prepublish.js nodes credentials package.json"
+		"build": "rimraf dist && tsc -p tsconfig.build.json && gulp build:icons",
+		"dev": "tsc -p tsconfig.build.json --watch",
+		"format": "prettier src --write",
+		"lint": "eslint src package.json",
+		"lintfix": "eslint src package.json --fix",
+		"prepublishOnly": "npm run build && npm run lint -c .eslintrc.prepublish.js src package.json"
 	},
 	"files": [
 		"dist"

@@ -7,9 +7,12 @@ node_modules
 .eslintrc.prepublish.js
 .prettierrc.js
 tsconfig.json
+tsconfig.build.json
 gulpfile.js
-nodes
-credentials
+jest.config.js
+jest.integration.config.js
+src
+test
 *.ts
 .index.js
 !dist/**/*.d.ts
