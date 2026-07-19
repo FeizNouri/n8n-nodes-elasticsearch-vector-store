@@ -21,7 +21,7 @@
     "sourceMap": true,
     "skipLibCheck": true,
     "outDir": "./dist/",
-    "types": ["node"]
+    "types": ["node", "jest"]
   },
   "include": ["src/**/*", "test/**/*", "package.json"],
   "exclude": ["dist/**/*", "node_modules/**/*"]

@@ -28,6 +28,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Unit tests
+        run: npm test
+
       - name: Type-check & build
         run: npm run build
 
@@ -36,6 +39,12 @@ jobs:
           test -f dist/credentials/ElasticsearchVectorApi.credentials.js
           test -f dist/nodes/VectorStoreElasticsearch/VectorStoreElasticsearch.node.js
           test -f dist/nodes/VectorStoreElasticsearch/elasticsearchVectorStore.svg
+          test -f dist/vectorstore/ElasticVectorSearch.js
+
+      - name: Verify no @langchain/community in the tree
+        run: |
+          ! test -d node_modules/@langchain/community
+          ! grep -q '"@langchain/community"' package.json
 
       - name: Inspect npm tarball contents
         run: npm pack --dry-run

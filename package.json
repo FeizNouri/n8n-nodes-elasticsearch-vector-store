@@ -40,9 +40,11 @@
 	"scripts": {
 		"build": "rimraf dist && tsc -p tsconfig.build.json && gulp build:icons",
 		"dev": "tsc -p tsconfig.build.json --watch",
-		"format": "prettier src --write",
+		"format": "prettier src test --write",
 		"lint": "eslint src package.json",
 		"lintfix": "eslint src package.json --fix",
+		"test": "jest",
+		"test:integration": "jest -c jest.integration.config.js",
 		"prepublishOnly": "npm run build && npm run lint -c .eslintrc.prepublish.js src package.json"
 	},
 	"files": [
@@ -65,14 +67,17 @@
 		"n8n-workflow": "*"
 	},
 	"devDependencies": {
+		"@types/jest": "^29.5.14",
 		"@types/node": "^20.11.30",
 		"@typescript-eslint/parser": "^7.15.0",
 		"eslint": "^8.57.0",
 		"eslint-plugin-n8n-nodes-base": "^1.16.3",
 		"gulp": "^4.0.2",
+		"jest": "^29.7.0",
 		"n8n-workflow": "*",
 		"prettier": "^3.3.2",
 		"rimraf": "^5.0.7",
+		"ts-jest": "^29.4.11",
 		"typescript": "^5.5.3"
 	}
 }
