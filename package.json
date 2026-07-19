@@ -51,7 +51,8 @@
 		"prepublishOnly": "npm run build && npm run lint -c .eslintrc.prepublish.js src package.json"
 	},
 	"files": [
-		"dist"
+		"dist",
+		"!dist/**/*.tsbuildinfo"
 	],
 	"n8n": {
 		"n8nNodesApiVersion": 1,
