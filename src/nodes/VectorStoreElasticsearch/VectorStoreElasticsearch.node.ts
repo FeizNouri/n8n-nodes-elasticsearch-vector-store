@@ -11,7 +11,11 @@ import {
 	type SupplyData,
 } from 'n8n-workflow';
 import { Client, type ClientOptions } from '@elastic/elasticsearch';
-import { ElasticVectorSearch } from '@langchain/community/vectorstores/elasticsearch';
+import {
+	ElasticVectorSearch,
+	type ElasticFilterCondition,
+	type ElasticSimilarity,
+} from '../../vectorstore/ElasticVectorSearch';
 import type { Document } from '@langchain/core/documents';
 import type { Embeddings } from '@langchain/core/embeddings';
 import { DynamicTool } from '@langchain/core/tools';
@@ -40,6 +44,23 @@ const insertFields: INodeProperties[] = [
 		displayOptions: { show: { mode: ['insert'] } },
 		options: [
 			{
+				displayName: 'Add Chunk Index',
+				name: 'addChunkIndex',
+				type: 'boolean',
+				default: false,
+				description:
+					'Whether to auto-number chunks per input item and store as a top-level "chunk_index" field',
+			},
+			{
+				displayName: 'Batch Size',
+				name: 'batchSize',
+				type: 'number',
+				default: 100,
+				typeOptions: { minValue: 1 },
+				description:
+					'Maximum number of documents sent per Elasticsearch _bulk request. Lower this if you hit "413 Request Entity Too Large" from a reverse proxy (e.g. nginx default is 1 MB).',
+			},
+			{
 				displayName: 'Clear Index Before Insert',
 				name: 'clearIndex',
 				type: 'boolean',
@@ -57,21 +78,18 @@ const insertFields: INodeProperties[] = [
 					'Comma-separated allowlist of metadata keys. Empty = keep all (including auto-generated noise like pdf.*, loc.*, source). Set this to strip unwanted fields injected by document loaders.',
 			},
 			{
-				displayName: 'Add Chunk Index',
-				name: 'addChunkIndex',
-				type: 'boolean',
-				default: false,
+				displayName: 'Similarity Metric',
+				name: 'similarity',
+				type: 'options',
+				default: 'default',
 				description:
-					'Whether to auto-number chunks per input item and store as a top-level "chunk_index" field',
-			},
-			{
-				displayName: 'Batch Size',
-				name: 'batchSize',
-				type: 'number',
-				default: 100,
-				typeOptions: { minValue: 1 },
-				description:
-					'Maximum number of documents sent per Elasticsearch _bulk request. Lower this if you hit "413 Request Entity Too Large" from a reverse proxy (e.g. nginx default is 1 MB).',
+					'Similarity used for the dense_vector mapping when the index is auto-created. Only affects new indices — existing indices keep their mapping. "Default" preserves the historical behavior: cosine when any document-shape option is set, L2 norm otherwise.',
+				options: [
+					{ name: 'Cosine', value: 'cosine' },
+					{ name: 'Default (Preserve Historical Behavior)', value: 'default' },
+					{ name: 'Dot Product', value: 'dot_product' },
+					{ name: 'L2 Norm', value: 'l2_norm' },
+				],
 			},
 		],
 	},
@@ -139,6 +157,81 @@ const retrieveFields: INodeProperties[] = [
 		default: true,
 		displayOptions: { show: { mode: ['load'] } },
 		description: 'Whether to include document metadata in the output',
+	},
+
+	// --- Options shared by all retrieval modes ---
+	{
+		displayName: 'Search Filters',
+		name: 'searchFilters',
+		type: 'fixedCollection',
+		typeOptions: { multipleValues: true, sortable: false },
+		placeholder: 'Add Filter',
+		default: {},
+		displayOptions: { show: { mode: ['load', 'retrieve', 'retrieve-as-tool'] } },
+		description:
+			'Exact-match (term) filters applied to every similarity search. All filters must match (AND). Use Top-Level location to filter on Custom Top-Level Fields such as account_id.',
+		options: [
+			{
+				name: 'filters',
+				displayName: 'Filter',
+				values: [
+					{
+						displayName: 'Field Name',
+						name: 'field',
+						type: 'string',
+						default: '',
+						placeholder: 'account_id',
+						description: 'Name of the field to filter on',
+					},
+					{
+						displayName: 'Field Location',
+						name: 'location',
+						type: 'options',
+						default: 'metadata',
+						options: [
+							{
+								name: 'Metadata',
+								value: 'metadata',
+								description: 'Match against metadata.&lt;field&gt; (document loader metadata)',
+							},
+							{
+								name: 'Top-Level',
+								value: 'topLevel',
+								description:
+									'Match against a top-level document field (e.g. Custom Top-Level Fields, chunk_index)',
+							},
+						],
+					},
+					{
+						displayName: 'Value',
+						name: 'value',
+						type: 'string',
+						default: '',
+						placeholder: '={{ $json.account_id }}',
+						description: 'Value the field must equal. Supports expressions.',
+					},
+				],
+			},
+		],
+	},
+	{
+		displayName: 'Search Options',
+		name: 'searchOptions',
+		type: 'collection',
+		placeholder: 'Add Option',
+		default: {},
+		displayOptions: { show: { mode: ['load', 'retrieve', 'retrieve-as-tool'] } },
+		options: [
+			{
+				displayName: 'Number of Candidates',
+				name: 'numCandidates',
+				type: 'number',
+				default: 200,
+				typeOptions: { minValue: 1 },
+				description:
+					'How many nearest-neighbor candidates each shard considers (kNN num_candidates) before picking the top results. Higher improves recall at the cost of search speed.',
+			},
+		],
 	},
 
 	// --- "Retrieve as Tool" mode ---
@@ -351,10 +444,36 @@ async function buildVectorStore(
 
 	const client = await getElasticsearchClient.call(this);
 
+	const searchOptions = this.getNodeParameter('searchOptions', itemIndex, {}) as {
+		numCandidates?: number;
+	};
+	const filters = getSearchFilters.call(this, itemIndex);
+
 	return new ElasticVectorSearch(embeddings, {
 		client,
 		indexName,
+		vectorSearchOptions: { candidates: searchOptions.numCandidates },
+		defaultFilter: filters.length > 0 ? filters : undefined,
 	});
+}
+
+function getSearchFilters(
+	this: IExecuteFunctions | ISupplyDataFunctions,
+	itemIndex: number,
+): ElasticFilterCondition[] {
+	const raw = this.getNodeParameter('searchFilters.filters', itemIndex, []) as Array<{
+		field?: string;
+		location?: string;
+		value?: unknown;
+	}>;
+	return raw
+		.filter((f) => f.field)
+		.map((f) => ({
+			field: f.field as string,
+			operator: 'term',
+			value: f.value,
+			topLevel: f.location === 'topLevel',
+		}));
 }
 
 async function runGetMany(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
@@ -394,8 +513,13 @@ async function runInsert(this: IExecuteFunctions): Promise<INodeExecutionData[][
 		metadataKeep?: string;
 		addChunkIndex?: boolean;
 		batchSize?: number;
+		similarity?: ElasticSimilarity | 'default';
 	};
 	const batchSize = Math.max(1, options.batchSize ?? 100);
+	// undefined = keep the historical per-path default (cosine in raw mode,
+	// l2_norm in ElasticVectorSearch's auto-created mapping)
+	const similarityOverride =
+		options.similarity && options.similarity !== 'default' ? options.similarity : undefined;
 
 	const embeddings = (await this.getInputConnectionData(
 		NodeConnectionTypes.AiEmbedding,
@@ -473,7 +597,7 @@ async function runInsert(this: IExecuteFunctions): Promise<INodeExecutionData[][
 			const vectors = await embeddings.embedDocuments(texts);
 
 			// Ensure index exists with a dense_vector mapping that matches our embedding dim
-			await ensureIndex(client, indexName, vectors[0]?.length ?? 0);
+			await ensureIndex(client, indexName, vectors[0]?.length ?? 0, similarityOverride ?? 'cosine');
 
 			// Build per-doc payloads, then ship them in batches to keep each _bulk
 			// request small enough for reverse proxies (nginx default is 1 MB).
@@ -520,7 +644,11 @@ async function runInsert(this: IExecuteFunctions): Promise<INodeExecutionData[][
 				'No documents to insert. Make sure your document loader is producing output.',
 			);
 		}
-		const store = new ElasticVectorSearch(embeddings, { client, indexName });
+		const store = new ElasticVectorSearch(embeddings, {
+			client,
+			indexName,
+			vectorSearchOptions: { similarity: similarityOverride },
+		});
 		// Batch to keep each _bulk request under reverse-proxy body limits.
 		for (let start = 0; start < documents.length; start += batchSize) {
 			await store.addDocuments(documents.slice(start, start + batchSize));
@@ -568,25 +696,37 @@ async function getDocsForItem(
 	return [];
 }
 
-async function ensureIndex(client: Client, indexName: string, dims: number): Promise<void> {
+async function ensureIndex(
+	client: Client,
+	indexName: string,
+	dims: number,
+	similarity: ElasticSimilarity,
+): Promise<void> {
 	if (dims === 0) return;
 	const exists = await client.indices.exists({ index: indexName });
 	if (exists) return;
-	await client.indices.create({
-		index: indexName,
-		mappings: {
-			properties: {
-				text: { type: 'text' },
-				embedding: {
-					type: 'dense_vector',
-					dims,
-					index: true,
-					similarity: 'cosine',
+	try {
+		await client.indices.create({
+			index: indexName,
+			mappings: {
+				properties: {
+					text: { type: 'text' },
+					embedding: {
+						type: 'dense_vector',
+						dims,
+						index: true,
+						similarity,
+					},
+					metadata: { type: 'object', enabled: true },
 				},
-				metadata: { type: 'object', enabled: true },
 			},
-		},
-	});
+		});
+	} catch (err) {
+		// Tolerate a concurrent insert winning the exists/create race
+		const type = (err as { meta?: { body?: { error?: { type?: string } } } })?.meta?.body?.error
+			?.type;
+		if (type !== 'resource_already_exists_exception') throw err;
+	}
 }
 
 async function resolveDocuments(
